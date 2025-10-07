@@ -1,3 +1,4 @@
+import os
 from pydantic import BaseModel
 
 from process.gui.setup.images.face_capture_button import face_capture_image_path
@@ -9,10 +10,11 @@ from process.gui.setup.images.signup_button import signup_button_image_path
 
 class ImagePaths(BaseModel):
     # main images
-    init_img: str = gui_init_image_path
+    # permite override con variable de entorno GUI_BACKGROUND
+    init_img: str = os.getenv("GUI_BACKGROUND", gui_init_image_path)
     login_img: str = login_button_image_path
     signup_img: str = signup_button_image_path
 
     # secondary windows
-    gui_signup_img: str = gui_signup_image_path
+    gui_signup_img: str = os.getenv("GUI_BACKGROUND", gui_signup_image_path)
     register_img: str = face_capture_image_path

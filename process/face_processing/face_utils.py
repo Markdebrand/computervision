@@ -57,20 +57,29 @@ class FaceUtils:
     # crop
     def face_crop(self, face_image: np.ndarray, face_bbox: List[int]) -> np.ndarray:
         h, w, _ = face_image.shape
+        if not face_bbox or len(face_bbox) != 4:
+            return np.zeros((0, 0, 3), dtype=face_image.dtype)
         offset_x, offset_y = int(w * 0.025), int(h * 0.025)
         xi, yi, xf, yf = face_bbox
-        xi, yi, xf, yf = xi - offset_x, yi - (offset_y*4), xf + offset_x, yf
+        xi, yi, xf, yf = xi - offset_x, yi - (offset_y*2), xf + offset_x, yf + offset_y
+        xi = max(0, xi)
+        yi = max(0, yi)
+        xf = min(w, xf)
+        yf = min(h, yf)
+        if xi >= xf or yi >= yf:
+            return np.zeros((0, 0, 3), dtype=face_image.dtype)
         return face_image[yi:yf, xi:xf]
 
     # save
     def save_face(self, face_crop: np.ndarray, user_code: str, path: str):
-        if len(face_crop) != 0:
-            face_crop = cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB)
-            cv2.imwrite(f"{path}/{user_code}.png", face_crop)
-            return True
-
-        else:
+        if face_crop is None or face_crop.size == 0:
             return False
+        # asegurar directorio
+        os.makedirs(path, exist_ok=True)
+        # guardar en BGR directamente
+        out_path = os.path.join(path, f"{user_code}.png")
+        ok = cv2.imwrite(out_path, face_crop)
+        return bool(ok)
 
     # draw
     def show_state_signup(self, face_image: np.ndarray, state: bool):
@@ -123,6 +132,10 @@ class FaceUtils:
         self.face_db: List[np.ndarray] = []
         self.face_names: List[str] = []
 
+        if not os.path.isdir(database_path):
+            os.makedirs(database_path, exist_ok=True)
+            return self.face_db, self.face_names, 'Empty database'
+
         for file in os.listdir(database_path):
             if file.lower().endswith(('.png', '.jpg', '.jpeg')):
                 img_path = os.path.join(database_path, file)
@@ -135,9 +148,27 @@ class FaceUtils:
 
     def face_matching(self, current_face: np.ndarray, face_db: List[np.ndarray], name_db: List[str]) -> Tuple[bool, str]:
         user_name: str = ''
-        current_face = cv2.cvtColor(current_face, cv2.COLOR_RGB2BGR)
+        # current_face ya está en BGR desde la cámara/proceso
+        if current_face is None or current_face.size == 0 or len(face_db) == 0:
+            return False, 'Face unknown'
+        # seleccionar modelo por variable de entorno
+        model_name = os.getenv('FACE_MODEL', 'SFace').lower()
+        matcher_map = {
+            'vgg-face': self.face_matcher.face_matching_vgg_model,
+            'vgg': self.face_matcher.face_matching_vgg_model,
+            'facenet': self.face_matcher.face_matching_facenet_model,
+            'facenet512': self.face_matcher.face_matching_facenet512_model,
+            'openface': self.face_matcher.face_matching_openface_model,
+            'deepface': self.face_matcher.face_matching_deepface_model,
+            'deepid': self.face_matcher.face_matching_deepid_model,
+            'arcface': self.face_matcher.face_matching_arcface_model,
+            'dlib': self.face_matcher.face_matching_dlib_model,
+            'sface': self.face_matcher.face_matching_sface_model,
+            'ghostfacenet': self.face_matcher.face_matching_ghostfacenet_model,
+        }
+        matcher_fn = matcher_map.get(model_name, self.face_matcher.face_matching_sface_model)
         for idx, face_img in enumerate(face_db):
-            self.matching, self.distance = self.face_matcher.face_matching_sface_model(current_face, face_img)
+            self.matching, self.distance = matcher_fn(current_face, face_img)
             print(f'validating face with: {name_db[idx]}')
             print(f'matching: {self.matching} distance: {self.distance}')
             if self.matching:

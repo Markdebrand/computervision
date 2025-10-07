@@ -37,7 +37,7 @@ class FaceLogIn:
             # step 6: extract face info
             # bbox & key_points
             self.cont_frame = self.cont_frame + 1
-            if self.cont_frame == 48:
+            if self.cont_frame >= 48:
                 face_bbox = self.face_utilities.extract_face_bbox(face_image, face_info)
                 face_points = self.face_utilities.extract_face_points(face_image, face_info)
 

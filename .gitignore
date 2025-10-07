@@ -1,0 +1,35 @@
+# Python virtual environments
+venv/
+*.venv/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+
+# VS Code settings
+.vscode/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment variables
+.env
+
+# Logs
+*.log
+
+# Test output
+htmlcov/
+coverage.xml
+
+# Ignore diagrams and images
+*.png
+*.jpg
+*.jpeg
+*.gif
+
+diagrama.png

@@ -1,3 +1,5 @@
+import pandas as pd
+from datetime import datetime
 import os
 from tkinter import *
 import tkinter as Tk
@@ -19,6 +21,44 @@ class CustomFrame(Tk.Frame):
 
 
 class GraphicalUserInterface:
+    def save_attendance_to_excel(self, nombre, apellido, hora_entrada, hora_salida, fecha, excel_path="attendance.xlsx"):
+        try:
+            df = pd.read_excel(excel_path)
+        except FileNotFoundError:
+            df = pd.DataFrame(columns=["Nombre", "Apellido", "Hora de entrada", "Hora de salida", "Fecha"])
+
+        if hora_entrada and not hora_salida:
+            # Registrar entrada: agrega nueva fila
+            new_row = {
+                "Nombre": nombre,
+                "Apellido": apellido,
+                "Hora de entrada": hora_entrada,
+                "Hora de salida": "",
+                "Fecha": fecha
+            }
+            df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+        elif hora_salida and not hora_entrada:
+            # Registrar salida: busca última fila sin salida y la actualiza
+            mask = (
+                (df["Nombre"] == nombre) &
+                (df["Apellido"] == apellido) &
+                (df["Fecha"] == fecha) &
+                (df["Hora de salida"] == "")
+            )
+            idx = df[mask].last_valid_index()
+            if idx is not None:
+                df.at[idx, "Hora de salida"] = hora_salida
+            else:
+                # Si no hay entrada previa, agrega fila solo con salida
+                new_row = {
+                    "Nombre": nombre,
+                    "Apellido": apellido,
+                    "Hora de entrada": "",
+                    "Hora de salida": hora_salida,
+                    "Fecha": fecha
+                }
+                df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+        df.to_excel(excel_path, index=False)
     def __init__(self, root):
         self.main_window = root
         self.main_window.title('faces access control')
@@ -53,6 +93,7 @@ class GraphicalUserInterface:
         self.login_video = None
 
         # modules
+        # ...existing code...
         self.images = ImagePaths()
         self.database = DataBasePaths()
         self.face_sign_up = FaceSignUp()
@@ -167,6 +208,18 @@ class GraphicalUserInterface:
         self.face_login_window = None
         self.login_video = None
 
+        # Save to Excel (login = salida)
+        nombre = ""
+        apellido = ""
+        if hasattr(self, 'name') and self.name:
+            nombre = self.name.strip()
+            if " " in nombre:
+                nombre, apellido = nombre.split(" ", 1)
+        hora_entrada = ""
+        hora_salida = datetime.now().strftime("%H:%M:%S")
+        fecha = datetime.now().strftime("%d/%m/%Y")
+        self.save_attendance_to_excel(nombre, apellido, hora_entrada, hora_salida, fecha)
+
     def close_signup(self):
         try:
             if self.face_signup_window:
@@ -207,6 +260,11 @@ class GraphicalUserInterface:
     def data_sign_up(self):
         # extract data
         self.name, self.user_code = self.input_name.get(), self.input_user_code.get()
+        # treat placeholders as empty
+        if self.name in ("Enter your name", None):
+            self.name = ""
+        if self.user_code in ("Enter your user code", None):
+            self.user_code = ""
         # check data
         if len(self.name) == 0 or len(self.user_code) == 0:
             print('¡Formulary incomplete!')
@@ -268,15 +326,114 @@ class GraphicalUserInterface:
         except Exception:
             self.signup_window.configure(bg="#101318")
 
-        # input data
-        self.input_name = Entry(self.signup_window)
-        # Aproximadamente donde estaban (585,320) en 1280x720 -> (~0.46, ~0.44)
-        self.input_name.place(relx=0.46, rely=0.44, anchor='center')
-        self.input_user_code = Entry(self.signup_window)
-        # Aproximadamente (585,475) -> (~0.46, ~0.66)
-        self.input_user_code.place(relx=0.46, rely=0.66, anchor='center')
+        # ===== Card background for form ===== #
+        card_w, card_h = 500, 320
+        card_x, card_y = (1280 - card_w) // 2, (720 - card_h) // 2
+        self.signup_card = Canvas(self.signup_window, width=card_w, height=card_h, bg='#e0e0e0', highlightthickness=0)
+        self.signup_card.place(x=card_x, y=card_y)
+        # Draw rounded rectangle (simulate with polygons/arcs)
+        def draw_rounded_rect(canvas, x, y, w, h, r, color, alpha=0.85):
+            # Tkinter doesn't support alpha, so use a solid color
+            # For true alpha, use PIL to generate an image and place it, but here we use a light gray
+            canvas.create_rectangle(x+r, y, x+w-r, y+h, fill=color, outline=color)
+            canvas.create_rectangle(x, y+r, x+w, y+h-r, fill=color, outline=color)
+            # Guardar hora de entrada en Excel justo después del registro
+            nombre = ""
+            apellido = ""
+            if self.name:
+                nombre = self.name.strip()
+                if " " in nombre:
+                    nombre, apellido = nombre.split(" ", 1)
+            hora_entrada = datetime.now().strftime("%H:%M:%S")
+            hora_salida = ""
+            fecha = datetime.now().strftime("%d/%m/%Y")
+            self.save_attendance_to_excel(nombre, apellido, hora_entrada, hora_salida, fecha)
+            canvas.create_oval(x, y, x+2*r, y+2*r, fill=color, outline=color)
+            canvas.create_oval(x+w-2*r, y, x+w, y+2*r, fill=color, outline=color)
+            canvas.create_oval(x, y+h-2*r, x+2*r, y+h, fill=color, outline=color)
+            canvas.create_oval(x+w-2*r, y+h-2*r, x+w, y+h, fill=color, outline=color)
 
-        # input button
+        draw_rounded_rect(self.signup_card, 0, 0, card_w, card_h, 32, '#e0e0e0')
+
+        # ===== Place widgets inside card ===== #
+        # Helper: placeholder behavior
+        def _add_placeholder(entry: Entry, text: str):
+            entry.insert(0, text)
+            entry.config(fg="#7a7a7a")
+            def on_focus_in(_):
+                if entry.get() == text:
+                    entry.delete(0, END)
+                    entry.config(fg="#111111")
+            def on_focus_out(_):
+                if entry.get() == "":
+                    entry.insert(0, text)
+                    entry.config(fg="#7a7a7a")
+            entry.bind("<FocusIn>", on_focus_in)
+            entry.bind("<FocusOut>", on_focus_out)
+
+        # Title LOGIN
+        self.signup_title_lbl = Label(
+            self.signup_window,
+            text="LOGIN",
+            font=("Segoe UI", 28, "bold"),
+            fg="#222",
+            bg="#e0e0e0"
+        )
+        self.signup_title_lbl.place(x=card_x+card_w//2, y=card_y+38, anchor='center')
+
+        # NAME label
+        self.name_label = Label(
+            self.signup_window,
+            text="NAME:",
+            font=("Segoe UI", 14, "bold"),
+            fg="#222",
+            bg="#e0e0e0"
+        )
+        self.name_label.place(x=card_x+60, y=card_y+90, anchor='w')
+
+        # Name input
+        self.input_name = Entry(
+            self.signup_window,
+            width=28,
+            font=("Segoe UI", 12),
+            relief="flat",
+            bd=2,
+            bg="#FFFFFF",
+            highlightthickness=1,
+            highlightbackground="#c7c7c7",
+            highlightcolor="#4a90e2",
+            justify='left'
+        )
+        self.input_name.place(x=card_x+160, y=card_y+90, anchor='w', width=260, height=32)
+        _add_placeholder(self.input_name, "Enter your name")
+
+        # USER CODE label
+        self.user_code_label = Label(
+            self.signup_window,
+            text="USER CODE:",
+            font=("Segoe UI", 14, "bold"),
+            fg="#222",
+            bg="#e0e0e0"
+        )
+        self.user_code_label.place(x=card_x+60, y=card_y+150, anchor='w')
+
+        # User code input
+        self.input_user_code = Entry(
+            self.signup_window,
+            width=28,
+            font=("Segoe UI", 12),
+            relief="flat",
+            bd=2,
+            bg="#FFFFFF",
+            highlightthickness=1,
+            highlightbackground="#c7c7c7",
+            highlightcolor="#4a90e2",
+            justify='left'
+        )
+        self.input_user_code.place(x=card_x+160, y=card_y+150, anchor='w', width=260, height=32)
+        _add_placeholder(self.input_user_code, "Enter your user code")
+
+        # Register button
         try:
             register_button_img = PhotoImage(file=self.images.register_img)
             register_button = Button(self.signup_window, image=register_button_img, height="40", width="200",
@@ -285,8 +442,12 @@ class GraphicalUserInterface:
         except Exception:
             register_button = Button(self.signup_window, text="Registrar", height=2, width=24,
                                      command=self.data_sign_up)
-        # Aproximadamente (1005,565) -> (~0.785, ~0.785)
-        register_button.place(relx=0.785, rely=0.785, anchor='center')
+        register_button.place(x=card_x+card_w//2, y=card_y+230, anchor='center')
+
+        # Submit with Enter key from either input
+        self.signup_window.bind('<Return>', lambda _e: self.data_sign_up())
+
+        # ...existing code...
 
     def main(self):
         # responsive background for main window

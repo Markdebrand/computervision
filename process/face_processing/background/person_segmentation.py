@@ -15,7 +15,13 @@ class PersonSegmenter:
     """
     def __init__(self, background_image: Optional[str] = None, bg_color=(16, 19, 24)):
         self.bg_color = bg_color
-        self.bg_image_path = background_image or os.getenv('GUI_BACKGROUND', '')
+        # Use ImagePaths.init_img if available
+        try:
+            from process.gui.image_paths import ImagePaths
+            default_bg = ImagePaths().init_img
+        except Exception:
+            default_bg = None
+        self.bg_image_path = background_image or os.getenv('GUI_BACKGROUND', default_bg or '')
         self.bg_image = None
         if self.bg_image_path and os.path.exists(self.bg_image_path):
             self.bg_image = cv2.imread(self.bg_image_path)

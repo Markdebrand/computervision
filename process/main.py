@@ -1,5 +1,7 @@
 import pandas as pd
 from datetime import datetime
+import threading
+import time
 import os
 from tkinter import *
 import tkinter as Tk
@@ -76,6 +78,19 @@ class GraphicalUserInterface:
         self.cap.set(3, 1280)
         self.cap.set(4, 720)
 
+        # performance/tuning
+        self.display_interval_ms = int(os.getenv("DISPLAY_INTERVAL_MS", "33"))  # ~30 FPS
+        self.proc_width = int(os.getenv("PROC_WIDTH", "640"))  # downscale for processing
+        self.downscale_enabled = os.getenv("DOWNSCALE", "1") not in ("0", "false", "False")
+        self.use_segmentation = os.getenv("PERSON_SEGMENT", "1") not in ("0", "false", "False")
+
+        # async capture (latest-frame buffer)
+        self._frame_lock = threading.Lock()
+        self._latest_frame = None
+        self._capture_running = True
+        self._capture_thread = threading.Thread(target=self._capture_loop, name="CaptureLoop", daemon=True)
+        self._capture_thread.start()
+
         # signup window state
         self.signup_window = None
         self.input_name = None
@@ -114,6 +129,15 @@ class GraphicalUserInterface:
 
     def on_close(self):
         # release camera
+        try:
+            self._capture_running = False
+        except Exception:
+            pass
+        try:
+            if hasattr(self, '_capture_thread') and self._capture_thread and self._capture_thread.is_alive():
+                self._capture_thread.join(timeout=1.0)
+        except Exception:
+            pass
         try:
             if hasattr(self, 'cap') and self.cap and self.cap.isOpened():
                 self.cap.release()
@@ -162,20 +186,23 @@ class GraphicalUserInterface:
         self.facial_login()
 
     def facial_login(self):
-        if not self.cap:
-            return
-        ret, frame_bgr = self.cap.read()
-        if not ret:
-            # try again shortly
+        frame_bgr = self._get_latest_frame()
+        if frame_bgr is None:
             if self.login_video:
-                self.login_video.after(50, self.facial_login)
+                self.login_video.after(10, self.facial_login)
             return
+
+        # optional downscale for processing
+        proc_frame = self._resize_to_width(frame_bgr, self.proc_width) if self.downscale_enabled else frame_bgr
 
         # process in BGR
-        frame_processed, matcher, info = self.face_login.process(frame_bgr)
+        frame_processed, matcher, info = self.face_login.process(proc_frame)
 
         # apply person segmentation
-        seg_frame = self.segmenter.apply(frame_processed)
+        if self.use_segmentation:
+            seg_frame = self.segmenter.apply(frame_processed)
+        else:
+            seg_frame = frame_processed
 
         # display (convert to RGB only for Tk)
         frame_show = self._resize_to_width(seg_frame, 1280)
@@ -185,7 +212,7 @@ class GraphicalUserInterface:
 
         self.login_video.configure(image=img)
         self.login_video.image = img
-        self.login_video.after(10, self.facial_login)
+        self.login_video.after(self.display_interval_ms, self.facial_login)
 
         if matcher:
             # access granted -> open, then auto-close after a moment
@@ -230,15 +257,18 @@ class GraphicalUserInterface:
         self.signup_video = None
 
     def facial_sign_up(self):
-        if not self.cap:
-            return
-        ret, frame_bgr = self.cap.read()
-        if ret:
+        frame_bgr = self._get_latest_frame()
+        if frame_bgr is not None:
+            # optional downscale for processing
+            proc_frame = self._resize_to_width(frame_bgr, self.proc_width) if self.downscale_enabled else frame_bgr
             # process en BGR
-            frame_processed, save_image, info = self.face_sign_up.process(frame_bgr, self.user_code)
+            frame_processed, save_image, info = self.face_sign_up.process(proc_frame, self.user_code)
 
             # aplicar segmentación de persona sobre el fondo
-            seg_frame = self.segmenter.apply(frame_processed)
+            if self.use_segmentation:
+                seg_frame = self.segmenter.apply(frame_processed)
+            else:
+                seg_frame = frame_processed
             # config video (convertir a RGB solo para mostrar)
             frame_show = self._resize_to_width(seg_frame, 1280)
             frame_show = cv2.cvtColor(frame_show, cv2.COLOR_BGR2RGB)
@@ -248,14 +278,14 @@ class GraphicalUserInterface:
             # show frames
             self.signup_video.configure(image=img)
             self.signup_video.image = img
-            self.signup_video.after(10, self.facial_sign_up)
+            self.signup_video.after(self.display_interval_ms, self.facial_sign_up)
 
             if save_image:
                 self.signup_video.after(3000, self.close_signup)
         else:
             # try again shortly
             if self.signup_video:
-                self.signup_video.after(50, self.facial_sign_up)
+                self.signup_video.after(10, self.facial_sign_up)
 
     def data_sign_up(self):
         # extract data
@@ -326,36 +356,6 @@ class GraphicalUserInterface:
         except Exception:
             self.signup_window.configure(bg="#101318")
 
-        # ===== Card background for form ===== #
-        card_w, card_h = 500, 320
-        card_x, card_y = (1280 - card_w) // 2, (720 - card_h) // 2
-        self.signup_card = Canvas(self.signup_window, width=card_w, height=card_h, bg='#e0e0e0', highlightthickness=0)
-        self.signup_card.place(x=card_x, y=card_y)
-        # Draw rounded rectangle (simulate with polygons/arcs)
-        def draw_rounded_rect(canvas, x, y, w, h, r, color, alpha=0.85):
-            # Tkinter doesn't support alpha, so use a solid color
-            # For true alpha, use PIL to generate an image and place it, but here we use a light gray
-            canvas.create_rectangle(x+r, y, x+w-r, y+h, fill=color, outline=color)
-            canvas.create_rectangle(x, y+r, x+w, y+h-r, fill=color, outline=color)
-            # Guardar hora de entrada en Excel justo después del registro
-            nombre = ""
-            apellido = ""
-            if self.name:
-                nombre = self.name.strip()
-                if " " in nombre:
-                    nombre, apellido = nombre.split(" ", 1)
-            hora_entrada = datetime.now().strftime("%H:%M:%S")
-            hora_salida = ""
-            fecha = datetime.now().strftime("%d/%m/%Y")
-            self.save_attendance_to_excel(nombre, apellido, hora_entrada, hora_salida, fecha)
-            canvas.create_oval(x, y, x+2*r, y+2*r, fill=color, outline=color)
-            canvas.create_oval(x+w-2*r, y, x+w, y+2*r, fill=color, outline=color)
-            canvas.create_oval(x, y+h-2*r, x+2*r, y+h, fill=color, outline=color)
-            canvas.create_oval(x+w-2*r, y+h-2*r, x+w, y+h, fill=color, outline=color)
-
-        draw_rounded_rect(self.signup_card, 0, 0, card_w, card_h, 32, '#e0e0e0')
-
-        # ===== Place widgets inside card ===== #
         # Helper: placeholder behavior
         def _add_placeholder(entry: Entry, text: str):
             entry.insert(0, text)
@@ -371,27 +371,27 @@ class GraphicalUserInterface:
             entry.bind("<FocusIn>", on_focus_in)
             entry.bind("<FocusOut>", on_focus_out)
 
+        # Card parameters
+        card_w, card_h = 500, 320
+        card_x, card_y = (1280 - card_w) // 2, (720 - card_h) // 2
+        card_radius = 40
+        self.signup_card = Canvas(self.signup_window, width=card_w, height=card_h, bg='#e0e0e0', highlightthickness=0)
+        self.signup_card.place(x=card_x, y=card_y)
+        # Draw rounded card
+        self.signup_card.create_oval(0, 0, card_radius*2, card_radius*2, fill='#e0e0e0', outline='')
+        self.signup_card.create_oval(card_w-card_radius*2, 0, card_w, card_radius*2, fill='#e0e0e0', outline='')
+        self.signup_card.create_oval(0, card_h-card_radius*2, card_radius*2, card_h, fill='#e0e0e0', outline='')
+        self.signup_card.create_oval(card_w-card_radius*2, card_h-card_radius*2, card_w, card_h, fill='#e0e0e0', outline='')
+        self.signup_card.create_rectangle(card_radius, 0, card_w-card_radius, card_h, fill='#e0e0e0', outline='')
+        self.signup_card.create_rectangle(0, card_radius, card_w, card_h-card_radius, fill='#e0e0e0', outline='')
+
         # Title LOGIN
-        self.signup_title_lbl = Label(
-            self.signup_window,
-            text="LOGIN",
-            font=("Segoe UI", 28, "bold"),
-            fg="#222",
-            bg="#e0e0e0"
-        )
-        self.signup_title_lbl.place(x=card_x+card_w//2, y=card_y+38, anchor='center')
+        self.signup_card.create_text(card_w//2, 48, text="LOGIN", font=("Segoe UI", 28, "bold"), fill="#222")
 
         # NAME label
-        self.name_label = Label(
-            self.signup_window,
-            text="NAME:",
-            font=("Segoe UI", 14, "bold"),
-            fg="#222",
-            bg="#e0e0e0"
-        )
-        self.name_label.place(x=card_x+60, y=card_y+90, anchor='w')
-
-        # Name input
+        label_x = card_w//2 - 50
+        input_x = card_w//2 - 10
+        self.signup_card.create_text(label_x, 110, text="NAME:", font=("Segoe UI", 14, "bold"), fill="#222", anchor='e')
         self.input_name = Entry(
             self.signup_window,
             width=28,
@@ -404,20 +404,11 @@ class GraphicalUserInterface:
             highlightcolor="#4a90e2",
             justify='left'
         )
-        self.input_name.place(x=card_x+160, y=card_y+90, anchor='w', width=260, height=32)
+        self.input_name.place(x=card_x+input_x, y=card_y+95, anchor='w', width=260, height=32)
         _add_placeholder(self.input_name, "Enter your name")
 
         # USER CODE label
-        self.user_code_label = Label(
-            self.signup_window,
-            text="USER CODE:",
-            font=("Segoe UI", 14, "bold"),
-            fg="#222",
-            bg="#e0e0e0"
-        )
-        self.user_code_label.place(x=card_x+60, y=card_y+150, anchor='w')
-
-        # User code input
+        self.signup_card.create_text(label_x, 160, text="USER CODE:", font=("Segoe UI", 14, "bold"), fill="#222", anchor='e')
         self.input_user_code = Entry(
             self.signup_window,
             width=28,
@@ -430,24 +421,27 @@ class GraphicalUserInterface:
             highlightcolor="#4a90e2",
             justify='left'
         )
-        self.input_user_code.place(x=card_x+160, y=card_y+150, anchor='w', width=260, height=32)
+        self.input_user_code.place(x=card_x+input_x, y=card_y+145, anchor='w', width=260, height=32)
         _add_placeholder(self.input_user_code, "Enter your user code")
 
-        # Register button
-        try:
-            register_button_img = PhotoImage(file=self.images.register_img)
-            register_button = Button(self.signup_window, image=register_button_img, height="40", width="200",
-                                     command=self.data_sign_up)
-            register_button.image = register_button_img
-        except Exception:
-            register_button = Button(self.signup_window, text="Registrar", height=2, width=24,
-                                     command=self.data_sign_up)
-        register_button.place(x=card_x+card_w//2, y=card_y+230, anchor='center')
+        # Botón FACE CAPTURE
+        btn_w, btn_h, btn_r = 220, 48, 24
+        btn_x, btn_y = card_w//2 - btn_w//2, 220
+        def draw_signup_btn(canvas, x, y, w, h, r, color, text, tag):
+            canvas.create_oval(x, y, x+2*r, y+2*r, fill=color, outline=color, tags=tag)
+            canvas.create_oval(x+w-2*r, y, x+w, y+2*r, fill=color, outline=color, tags=tag)
+            canvas.create_oval(x, y+h-2*r, x+2*r, y+h, fill=color, outline=color, tags=tag)
+            canvas.create_oval(x+w-2*r, y+h-2*r, x+w, y+h, fill=color, outline=color, tags=tag)
+            canvas.create_rectangle(x+r, y, x+w-r, y+h, fill=color, outline=color, tags=tag)
+            canvas.create_rectangle(x, y+r, x+w, y+h-r, fill=color, outline=color, tags=tag)
+            canvas.create_text(x+w//2, y+h//2, text=text, font=("Segoe UI", 16, "bold"), fill="#ff9800", tags=tag)
+        draw_signup_btn(self.signup_card, btn_x, btn_y, btn_w, btn_h, btn_r, "#222", "FACE CAPTURE", "signup_btn")
+        def on_signup_btn_click(event):
+            self.data_sign_up()
+        self.signup_card.tag_bind("signup_btn", "<Button-1>", on_signup_btn_click)
 
         # Submit with Enter key from either input
         self.signup_window.bind('<Return>', lambda _e: self.data_sign_up())
-
-        # ...existing code...
 
     def main(self):
         # responsive background for main window
@@ -463,27 +457,75 @@ class GraphicalUserInterface:
         except Exception:
             self.frame.configure(bg="#0b0f14")
 
-        # buttons
-        self.login_button = Button(self.frame, text="Facial Access - Entry", height=2, width=24,
-                                   font=("Segoe UI", 12, "bold"), bg="#ff9800", fg="#ffffff",
-                                   activebackground="#ffa726", command=self.gui_login)
-        # Aproximadamente (980,325) -> (~0.765, ~0.45)
-        self.login_button.place(relx=0.765, rely=0.45, anchor='center')
+        # ===== Centered Card with Buttons and Title ===== #
+        card_w, card_h = 500, 320
+        card_x, card_y = (1280 - card_w) // 2, (720 - card_h) // 2
+        self.main_card = Canvas(self.frame, width=card_w, height=card_h, bg='#e0e0e0', highlightthickness=0)
+        self.main_card.place(x=card_x, y=card_y)
+        # Draw fully rounded card background
+        card_radius = 60
+        self.main_card.create_oval(0, 0, card_radius*2, card_radius*2, fill='#e0e0e0', outline='#e0e0e0')
+        self.main_card.create_oval(card_w-card_radius*2, 0, card_w, card_radius*2, fill='#e0e0e0', outline='#e0e0e0')
+        self.main_card.create_oval(0, card_h-card_radius*2, card_radius*2, card_h, fill='#e0e0e0', outline='#e0e0e0')
+        self.main_card.create_oval(card_w-card_radius*2, card_h-card_radius*2, card_w, card_h, fill='#e0e0e0', outline='#e0e0e0')
+        self.main_card.create_rectangle(card_radius, 0, card_w-card_radius, card_h, fill='#e0e0e0', outline='#e0e0e0')
+        self.main_card.create_rectangle(0, card_radius, card_w, card_h-card_radius, fill='#e0e0e0', outline='#e0e0e0')
 
-        self.signup_button = Button(self.frame, text="Facial Sign Up - Register", height=2, width=24,
-                                    font=("Segoe UI", 12, "bold"), bg="#00bcd4", fg="#ffffff",
-                                    activebackground="#26c6da", command=self.gui_signup)
-        # Aproximadamente (980,578) -> (~0.765, ~0.80)
-        self.signup_button.place(relx=0.765, rely=0.80, anchor='center')
+        # Title WELCOME
+        self.main_card.create_text(card_w//2, 48, text="WELCOME", font=("Segoe UI", 28, "bold"), fill="#222")
+
+        # Custom rounded buttons
+        btn_w, btn_h, btn_r = 340, 56, 28
+        btn_y1 = 90
+        btn_y2 = 170
+        # Draw rounded rectangles for buttons
+        def draw_button(canvas, x, y, w, h, r, color, text, tag):
+            canvas.create_oval(x, y, x+2*r, y+2*r, fill=color, outline=color, tags=tag)
+            canvas.create_oval(x+w-2*r, y, x+w, y+2*r, fill=color, outline=color, tags=tag)
+            canvas.create_oval(x, y+h-2*r, x+2*r, y+h, fill=color, outline=color, tags=tag)
+            canvas.create_oval(x+w-2*r, y+h-2*r, x+w, y+h, fill=color, outline=color, tags=tag)
+            canvas.create_rectangle(x+r, y, x+w-r, y+h, fill=color, outline=color, tags=tag)
+            canvas.create_rectangle(x, y+r, x+w, y+h-r, fill=color, outline=color, tags=tag)
+            canvas.create_text(x+w//2, y+h//2, text=text, font=("Segoe UI", 16, "bold"), fill="#c62828", tags=tag)
+
+        draw_button(self.main_card, (card_w-btn_w)//2, btn_y1, btn_w, btn_h, btn_r, "#ffe5e5", "Facial Access - Entry", "login_btn")
+        draw_button(self.main_card, (card_w-btn_w)//2, btn_y2, btn_w, btn_h, btn_r, "#ffe5e5", "Facial Sign Up - Register", "signup_btn")
+
+        # Bind click events to canvas buttons
+        def on_login_click(event):
+            self.gui_login()
+        def on_signup_click(event):
+            self.gui_signup()
+        self.main_card.tag_bind("login_btn", "<Button-1>", on_login_click)
+        self.main_card.tag_bind("signup_btn", "<Button-1>", on_signup_click)
 
     # ================= Helper methods: responsive backgrounds ================= #
+    def _capture_loop(self):
+        # Read frames as fast as possible; keep only the latest frame
+        while self._capture_running and self.cap:
+            ret, frame = self.cap.read()
+            if ret:
+                with self._frame_lock:
+                    self._latest_frame = frame
+            else:
+                time.sleep(0.01)
+        # end loop
+
+    def _get_latest_frame(self):
+        try:
+            with self._frame_lock:
+                if self._latest_frame is None:
+                    return None
+                return self._latest_frame.copy()
+        except Exception:
+            return None
     def _resize_main_bg(self):
         if self.bg_image_orig is None or self.bg_label is None:
             return
         w = max(1, self.frame.winfo_width())
         h = max(1, self.frame.winfo_height())
         try:
-            img_resized = self.bg_image_orig.resize((w, h), Image.LANCZOS)
+            img_resized = self.bg_image_orig.resize((w, h), Image.BICUBIC)
         except Exception:
             img_resized = self.bg_image_orig
         self._bg_photo = ImageTk.PhotoImage(img_resized)
@@ -496,7 +538,7 @@ class GraphicalUserInterface:
         w = max(1, self.signup_window.winfo_width())
         h = max(1, self.signup_window.winfo_height())
         try:
-            img_resized = self.signup_bg_image_orig.resize((w, h), Image.LANCZOS)
+            img_resized = self.signup_bg_image_orig.resize((w, h), Image.BICUBIC)
         except Exception:
             img_resized = self.signup_bg_image_orig
         self._signup_bg_photo = ImageTk.PhotoImage(img_resized)

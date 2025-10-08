@@ -1,1 +1,1 @@
-gui_signup_image_path: str = 'process/gui/setup/images/gui_signup_image.png'
+gui_signup_image_path: str = 'process/gui/setup/images/MDB-Microsoft-Teams-Banner-v2.1 (3).png'

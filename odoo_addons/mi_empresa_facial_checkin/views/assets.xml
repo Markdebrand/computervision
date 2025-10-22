@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Incluir assets del widget en el backend -->
+    <template id="assets_backend" inherit_id="web.assets_backend" name="Facial Checkin Assets">
+        <xpath expr="." position="inside">
+            <link rel="stylesheet" type="text/scss" href="/mi_empresa_facial_checkin/static/src/css/facial_checkin.css"/>
+            <script type="text/javascript" src="/mi_empresa_facial_checkin/static/src/js/facial_checkin_widget.js"/>
+            <xpath expr="." position="inside">
+                <t t-call-assets="mi_empresa_facial_checkin.assets_qweb"/>
+            </xpath>
+        </xpath>
+    </template>
+
+    <!-- Bundle QWeb para templates del widget -->
+    <template id="assets_qweb" name="Facial Checkin QWeb" inherit_id="web._assets_backend_helpers">
+        <xpath expr="." position="inside">
+            <t t-call-assets="mi_empresa_facial_checkin.qweb"/>
+        </xpath>
+    </template>
+
+    <template id="qweb" name="Facial Checkin QWeb Files">
+        <t t-extend="web.assets_backend">
+            <t t-jquery="head" t-operation="append">
+                <t t-call="mi_empresa_facial_checkin.FacialCheckinKioskTemplate"/>
+            </t>
+        </t>
+    </template>
+</odoo>

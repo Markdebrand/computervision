@@ -128,3 +128,42 @@ Simplemente suscribiendote a mi canal de YouTube:
 ### Siguiendome en mis redes sociales: 
 - [Instagram](https://www.instagram.com/santiagsanchezr/)
 - [Twitter](https://twitter.com/SantiagSanchezR)
+
+## Integración con Odoo: Fichaje Facial + GPS
+
+Este repositorio ahora incluye una arquitectura para integrar el sistema con Odoo (Asistencias) usando un módulo propio y un microservicio IA (FastAPI):
+
+- Módulo Odoo: `odoo_addons/mi_empresa_facial_checkin`
+	- Extiende `hr.employee` (campos: `x_face_encoding`, `x_face_reference_image`).
+	- Extiende `hr.attendance` (campos: `x_checkin_*` y `x_checkout_*` para lat/long/foto).
+	- Controlador JSON: `/hr/attendance/facial_check` (recibe imagen base64 + GPS y crea asistencia si el rostro coincide).
+	- Widget JS: activa cámara, obtiene GPS y envía la captura al controlador.
+
+- Microservicio IA: `ia_service/`
+	- FastAPI con endpoint `POST /verify_face` que compara la captura con el encoding guardado.
+
+### Cómo ejecutar el microservicio (desarrollo)
+
+```bash
+cd ia_service
+python -m venv .venv
+source .venv/bin/activate  # En Windows con Git Bash
+python -m pip install -r requirements.txt
+uvicorn ia_service.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+Opcional: ajusta el umbral de distancia en `ia_service/main.py` (por defecto 0.6).
+
+### Configurar Odoo
+
+1) Copia o añade la ruta `odoo_addons` a la ruta de addons de tu servidor Odoo.
+2) Actualiza la lista de apps y instala el módulo "Mi Empresa - Fichaje Facial".
+3) En Ajustes > Parámetros del sistema, crea el parámetro:
+	 - Clave: `mi_empresa_facial_checkin.ia_api_url`
+	 - Valor: `http://<host_del_microservicio>:8000/verify_face`
+4) En cada empleado, sube `Foto de Referencia` y pega `Codificación Facial` (formato `[0.1, 0.2, ...]`).
+5) En Asistencias, usa el modo "kiosco facial". El botón abrirá cámara y GPS (requiere HTTPS en producción).
+
+Notas:
+- Para móviles/navegador, la cámara y geolocalización requieren contexto seguro (HTTPS) y permisos del usuario.
+- Si necesitas comparación local en el servidor Odoo (sin microservicio), adapta el controlador para usar `face_recognition` directamente.

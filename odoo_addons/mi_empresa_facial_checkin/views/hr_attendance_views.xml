@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Heredar vista de asistencias para insertar nuestro contenedor/acción -->
+    <template id="my_attendances_inherited" inherit_id="hr_attendance.hr_attendance_my_attendances">
+        <xpath expr="//div[hasclass('o_hr_attendance_kiosk_mode')]" position="replace">
+            <div class="o_hr_attendance_facial_checkin_kiosk"/>
+        </xpath>
+    </template>
+</odoo>

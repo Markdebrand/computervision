@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Añadir campos de reconocimiento facial al formulario de empleado -->
+    <record id="view_employee_form_inherit_facial" model="ir.ui.view">
+        <field name="name">hr.employee.form.inherit.facial</field>
+        <field name="model">hr.employee</field>
+        <field name="inherit_id" ref="hr.view_employee_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//sheet/notebook" position="inside">
+                <page string="Fichaje Facial">
+                    <group>
+                        <field name="x_face_reference_image" widget="image" class="oe_avatar"/>
+                    </group>
+                    <group>
+                        <field name="x_face_encoding" placeholder="[0.1, 0.2, ...]"/>
+                    </group>
+                </page>
+            </xpath>
+        </field>
+    </record>
+</odoo>

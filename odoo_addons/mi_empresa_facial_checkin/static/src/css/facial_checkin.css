@@ -1,0 +1,6 @@
+/* Estilos mínimos para el widget de fichaje facial */
+.o_facial_checkin_kiosk { padding: 24px; }
+.o_facial_header h2 { margin-bottom: 8px; }
+.o_facial_body { margin-top: 16px; }
+.o_facial_modal { text-align: center; }
+.o_facial_video { border-radius: 6px; }

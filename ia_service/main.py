@@ -26,6 +26,11 @@ class FaceVerificationResponse(BaseModel):
     error: Optional[str] = None
 
 
+class FaceVerifyWithImageRequest(BaseModel):
+    image_b64: str
+    reference_image_b64: str
+
+
 def load_image_from_base64(b64_string: str) -> np.ndarray:
     """Convierte base64 (con o sin prefijo data:) a imagen RGB numpy."""
     if "," in b64_string:
@@ -68,5 +73,32 @@ async def verify_face(request: FaceVerificationRequest):
         is_match = distance <= 0.6
         return FaceVerificationResponse(match=is_match, distance=distance)
 
+    except Exception as e:
+        return FaceVerificationResponse(match=False, error=str(e))
+
+
+@app.post("/verify_face_image", response_model=FaceVerificationResponse)
+async def verify_face_image(request: FaceVerifyWithImageRequest):
+    """Compara una imagen desconocida contra una imagen de referencia (ambas en base64)."""
+    try:
+        if face_recognition is None:
+            return FaceVerificationResponse(match=False, error="face_recognition no disponible en el servidor")
+
+        # cargar imágenes
+        unknown_image = load_image_from_base64(request.image_b64)
+        ref_image = load_image_from_base64(request.reference_image_b64)
+
+        # obtener encodings
+        ref_encodings = face_recognition.face_encodings(ref_image)
+        if not ref_encodings:
+            return FaceVerificationResponse(match=False, error="No se detectó un rostro en la imagen de referencia")
+
+        unknown_encodings = face_recognition.face_encodings(unknown_image)
+        if not unknown_encodings:
+            return FaceVerificationResponse(match=False, error="No se detectó un rostro en la imagen enviada")
+
+        distance = float(face_recognition.face_distance([ref_encodings[0]], unknown_encodings[0])[0])
+        is_match = distance <= 0.6
+        return FaceVerificationResponse(match=is_match, distance=distance)
     except Exception as e:
         return FaceVerificationResponse(match=False, error=str(e))

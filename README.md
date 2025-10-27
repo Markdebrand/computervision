@@ -48,6 +48,128 @@ pip install -r requirements.txt
 Notas Windows:
 - Este proyecto NO requiere dlib/CMake si usas modelos de DeepFace (SFace/ArcFace/etc.).
 - `deepface` descarga modelos la primera vez; requiere conexión.
+ 
+Nota adicional: si al ejecutar la app ves un error como "Missing optional dependency 'openpyxl'" (pandas al leer/guardar Excel), instala `openpyxl`:
+
+```bash
+pip install openpyxl
+```
+
+## Guía paso a paso (Windows - Git Bash)
+
+Sigue estos pasos para tener todo funcionando de principio a fin. Los comandos están pensados para Windows usando Git Bash (bash.exe). Si usas PowerShell o CMD, adapta la sintaxis de variables.
+
+1) Clonar el repo y entrar a la carpeta del proyecto
+
+```bash
+git clone <tu-fork-o-este-repo>
+cd computervision
+```
+
+2) Crear un entorno virtual y activarlo
+
+```bash
+python -m venv .venv
+source .venv/Scripts/activate
+```
+
+3) Instalar dependencias del proyecto
+
+- Opción A (desde terminal):
+
+```bash
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+- Opción B (desde VS Code): ejecuta la Tarea "install-reqs" incluida en el workspace (hace lo mismo que A).
+
+4) Variables de entorno recomendadas (puedes exportarlas antes de ejecutar)
+
+```bash
+# Cámara y procesamiento
+export CAMERA_INDEX=0           # índice de cámara (0 por defecto)
+export DOWNSCALE=1              # 1 para procesar escalado (más rápido)
+export PROC_WIDTH=640           # ancho de procesamiento
+export PERSON_SEGMENT=1         # 1 para segmentación de persona (MediaPipe)
+
+# Fondo de la GUI (opcional)
+export GUI_BACKGROUND="process/gui/setup/images/gui_init_image.png"
+
+# Modelo de matching facial local (cuando USE_IA_SERVICE=0)
+# Valores válidos: SFace (default), ArcFace, VGG-Face, Facenet, Facenet512, OpenFace,
+#                   DeepFace, DeepID, Dlib, GhostFaceNet
+export FACE_MODEL=SFace
+
+# Puerto serie para abrir/cerrar puerta (opcional)
+export SERIAL_PORT=COM6
+export SERIAL_BAUD=115200
+
+# Microservicio IA (opcional)
+export USE_IA_SERVICE=1         # 1=usar API de verificación, 0=matching local
+export IA_SERVICE_URL=http://localhost:8000
+```
+
+5) Ejecutar la aplicación de escritorio (GUI)
+
+```bash
+python -m examples.example
+```
+
+Esto abrirá la ventana principal con dos botones:
+- Facial Access - Entry: inicia el flujo de verificación/acceso.
+- Facial Sign Up - Register: abre el registro facial del usuario.
+
+6) Registrar un usuario (necesario antes del login)
+
+- Haz clic en "Facial Sign Up - Register".
+- Escribe Nombre y Código de Usuario (único). Pulsa Enter o el botón "FACE CAPTURE".
+- Mira a la cámara unos segundos. Se guardará la imagen en `process/database/faces/<codigo>.png`.
+- Se crea/actualiza el archivo `process/database/users/<codigo>.txt` con el alta del usuario.
+
+7) Iniciar sesión facial (acceso)
+
+- Haz clic en "Facial Access - Entry".
+- Mira a la cámara ~3 segundos para comparar contra la base de rostros.
+- Si coincide: se envía `A` por serie para abrir y se registra acceso; a los 3s se envía `C` para cerrar.
+- También se guarda/actualiza `attendance.xlsx` con hora de entrada/salida según corresponda.
+
+8) Microservicio IA (obligatorio para Odoo)
+
+La app verifica el rostro usando el microservicio IA vía API (`IA_SERVICE_URL`). Debes tenerlo corriendo antes de hacer login:
+
+```bash
+cd ia_service
+python -m venv .venv
+source .venv/Scripts/activate
+python -m pip install -r requirements.txt
+uvicorn ia_service.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+Notas:
+- Este microservicio usa `face_recognition` (basado en dlib). En Windows puede requerir compilación.
+- Endpoint salud: `GET /health`.
+- Para integración con Odoo, apunta `mi_empresa_facial_checkin.ia_api_url` al endpoint del microservicio (ver sección Odoo).
+
+9) Controlador de puerta (opcional)
+
+- Por defecto, si el puerto serie no existe, la app continúa sin error.
+- Conecta tu microcontrolador (VEX/Arduino/etc.) y ajusta `SERIAL_PORT`/`SERIAL_BAUD`.
+- Firmware de ejemplo: `door_control/src/main.py`.
+
+10) Dónde se guardan los datos
+
+- Rostros registrados: `process/database/faces/`
+- Usuarios y logs de acceso: `process/database/users/`
+- Asistencias (Excel): `attendance.xlsx` en la raíz del proyecto
+
+11) Problemas comunes y tips
+
+- La cámara no abre: cambia `CAMERA_INDEX` o cierra otras apps que la usen.
+- Lento al comparar: usa `FACE_MODEL=SFace` o `ArcFace`. Activa `DOWNSCALE=1` y ajusta `PROC_WIDTH`.
+- MediaPipe Selfie Segmentation no disponible: la imagen se mostrará sin segmentación (la app sigue funcionando).
+- Sin dispositivo serie: la app funciona; configura `SERIAL_PORT` cuando conectes el controlador.
+- Modelos DeepFace: la primera vez descargan pesos (requiere Internet).
 
 ## Ejecutar la app
 
@@ -62,6 +184,13 @@ Variables de entorno útiles:
 - `SERIAL_PORT`: puerto serie (por defecto `COM6` en Windows).
 - `SERIAL_BAUD`: baudrate serie (por defecto `115200`).
 
+Extra:
+- `USE_IA_SERVICE`: 1 (default) para usar el microservicio IA. Si trabajas con Odoo, deja 1.
+- `REQUIRE_IA_SERVICE`: 1 (default) para exigir microservicio; si está caído, no se hará fallback local.
+- `IA_SERVICE_URL`: URL base del microservicio IA (por defecto `http://localhost:8000`).
+- `DOWNSCALE`, `PROC_WIDTH`, `PERSON_SEGMENT`: tuning de rendimiento/segmentación.
+- `GUI_BACKGROUND`: ruta a imagen de fondo para la GUI.
+
 Ejemplo Windows PowerShell:
 
 ```bash
@@ -70,9 +199,9 @@ $env:CAMERA_INDEX=0; $env:SERIAL_PORT="COM6"; python -m examples.example
 
 ## Registrar un usuario
 1) Botón "Registrar rostro".
-2) Introduce nombre y código de usuario (único).
+2) Introduce el nombre de la persona.
 
-3) Coloca el rostro al centro; la app recorta y guarda `process/database/faces/<codigo>.png`.
+3) Coloca el rostro al centro; la app genera automáticamente un identificador a partir del nombre y guarda `process/database/faces/<id_generado>.png`.
 
 ## Iniciar sesión facial
 

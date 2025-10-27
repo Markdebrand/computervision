@@ -1,6 +1,5 @@
 import os
 import base64
-import json
 from typing import Dict, Any, Optional
 
 import cv2
@@ -52,3 +51,16 @@ def verify_with_ref_image(
         }
     except Exception as e:
         return {"match": False, "distance": None, "error": str(e)}
+
+
+def health_check(base_url: Optional[str] = None, timeout: float = 1.5) -> bool:
+    """Comprueba si el microservicio IA está disponible (GET /health)."""
+    base_url = base_url or os.getenv('IA_SERVICE_URL') or 'http://localhost:8000'
+    url = base_url.rstrip('/') + '/health'
+    try:
+        resp = requests.get(url, timeout=timeout)
+        resp.raise_for_status()
+        data = resp.json()
+        return bool(data)
+    except Exception:
+        return False

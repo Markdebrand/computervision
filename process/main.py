@@ -24,10 +24,17 @@ class CustomFrame(Tk.Frame):
 
 class GraphicalUserInterface:
     def save_attendance_to_excel(self, nombre, apellido, hora_entrada, hora_salida, fecha, excel_path="attendance.xlsx"):
+        # Intentar leer Excel; si falta dependencia (openpyxl) o hay error, usar CSV o crear nuevo DataFrame
         try:
             df = pd.read_excel(excel_path)
-        except FileNotFoundError:
-            df = pd.DataFrame(columns=["Nombre", "Apellido", "Hora de entrada", "Hora de salida", "Fecha"])
+        except Exception as e:
+            # Puede ser FileNotFoundError o ImportError por openpyxl faltante u otro problema.
+            try:
+                # Intentar leer CSV equivalente como fallback
+                df = pd.read_csv(excel_path)
+            except Exception:
+                # Crear DataFrame vacío con las columnas esperadas
+                df = pd.DataFrame(columns=["Nombre", "Apellido", "Hora de entrada", "Hora de salida", "Fecha"])
 
         if hora_entrada and not hora_salida:
             # Registrar entrada: agrega nueva fila
@@ -41,17 +48,28 @@ class GraphicalUserInterface:
             df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
         elif hora_salida and not hora_entrada:
             # Registrar salida: busca última fila sin salida y la actualiza
-            mask = (
-                (df["Nombre"] == nombre) &
-                (df["Apellido"] == apellido) &
-                (df["Fecha"] == fecha) &
-                (df["Hora de salida"] == "")
-            )
-            idx = df[mask].last_valid_index()
-            if idx is not None:
-                df.at[idx, "Hora de salida"] = hora_salida
-            else:
-                # Si no hay entrada previa, agrega fila solo con salida
+            try:
+                mask = (
+                    (df["Nombre"] == nombre) &
+                    (df["Apellido"] == apellido) &
+                    (df["Fecha"] == fecha) &
+                    (df["Hora de salida"] == "")
+                )
+                idx = df[mask].last_valid_index()
+                if idx is not None:
+                    df.at[idx, "Hora de salida"] = hora_salida
+                else:
+                    # Si no hay entrada previa, agrega fila solo con salida
+                    new_row = {
+                        "Nombre": nombre,
+                        "Apellido": apellido,
+                        "Hora de entrada": "",
+                        "Hora de salida": hora_salida,
+                        "Fecha": fecha
+                    }
+                    df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+            except Exception:
+                # En caso de estructura inesperada, simplemente agregar la fila
                 new_row = {
                     "Nombre": nombre,
                     "Apellido": apellido,
@@ -60,7 +78,59 @@ class GraphicalUserInterface:
                     "Fecha": fecha
                 }
                 df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-        df.to_excel(excel_path, index=False)
+
+        # Intentar guardar en Excel; si falla (p.e. falta openpyxl), guardar en CSV como fallback
+        try:
+            df.to_excel(excel_path, index=False)
+        except Exception as e:
+            try:
+                csv_path = os.path.splitext(excel_path)[0] + '.csv'
+                df.to_csv(csv_path, index=False)
+                print(f"Warning: no fue posible guardar como Excel ({e}). Se guardó como CSV: {csv_path}")
+            except Exception as e2:
+                print(f"Error guardando attendance: {e2}")
+    def _resolve_fullname_from_code(self, code: str):
+        """Dado un código de usuario, intenta leer el nombre completo desde process/database/users/<code>.txt
+        Retorna (nombre, apellido). Si no existe, retorna (code, '')."""
+        try:
+            from process.database.config import DataBasePaths
+            db = DataBasePaths()
+            user_file = os.path.join(db.users, f"{code}.txt")
+            if os.path.exists(user_file):
+                with open(user_file, 'r', encoding='utf-8') as f:
+                    content = f.read().strip()
+                    # formato esperado: "Nombre Apellido,code,"
+                    parts = [p for p in content.split(',') if p]
+                    if parts:
+                        full = parts[0].strip()
+                        if ' ' in full:
+                            nombre, apellido = full.split(' ', 1)
+                            return nombre, apellido
+                        return full, ''
+        except Exception:
+            pass
+        return code, ''
+
+    def _slugify_name(self, name: str) -> str:
+        import re
+        s = name.strip().lower()
+        s = re.sub(r"[^a-z0-9\s_-]", "", s)
+        s = re.sub(r"[\s_-]+", "_", s).strip("_")
+        return s or "usuario"
+
+    def _ensure_unique_code(self, base: str) -> str:
+        # Evita colisión de archivo en faces y users
+        b = base
+        i = 2
+        faces_dir = self.database.faces
+        users_dir = self.database.users
+        while True:
+            face_path = os.path.join(faces_dir, f"{b}.png")
+            user_path = os.path.join(users_dir, f"{b}.txt")
+            if not os.path.exists(face_path) and not os.path.exists(user_path):
+                return b
+            b = f"{base}-{i}"
+            i += 1
     def __init__(self, root):
         self.main_window = root
         self.main_window.title('faces access control')
@@ -238,7 +308,17 @@ class GraphicalUserInterface:
         # Save to Excel (login = salida)
         nombre = ""
         apellido = ""
-        if hasattr(self, 'name') and self.name:
+        # Preferir el nombre reconocido por el login si está disponible
+        recognized = None
+        try:
+            recognized = getattr(self.face_login, 'last_user_name', None)
+        except Exception:
+            recognized = None
+        if recognized:
+            # recognized generalmente es el código (basename del PNG). Intentar resolver a nombre completo.
+            nombre, apellido = self._resolve_fullname_from_code(recognized.strip())
+        elif hasattr(self, 'name') and self.name:
+            # fallback al nombre almacenado durante el registro
             nombre = self.name.strip()
             if " " in nombre:
                 nombre, apellido = nombre.split(" ", 1)
@@ -288,44 +368,37 @@ class GraphicalUserInterface:
                 self.signup_video.after(10, self.facial_sign_up)
 
     def data_sign_up(self):
-        # extract data
-        self.name, self.user_code = self.input_name.get(), self.input_user_code.get()
-        # treat placeholders as empty
+        # extraer solo el nombre
+        self.name = self.input_name.get()
         if self.name in ("Enter your name", None):
             self.name = ""
-        if self.user_code in ("Enter your user code", None):
-            self.user_code = ""
-        # check data
-        if len(self.name) == 0 or len(self.user_code) == 0:
+        if len(self.name) == 0:
             print('¡Formulary incomplete!')
             return
-        # check user
-        self.user_list = os.listdir(self.database.check_users)
-        for u_list in self.user_list:
-            user = u_list
-            user = user.split('.')
-            self.user_codes.append(user[0])
-        if self.user_code in self.user_codes:
-            print('¡Previously registered user!')
-            return
 
-        # save data
+        # generar código desde el nombre y asegurar unicidad
+        base_code = self._slugify_name(self.name)
+        self.user_code = self._ensure_unique_code(base_code)
+
+        # guardar datos mínimos del usuario
         self.data.append(self.name)
         self.data.append(self.user_code)
 
         try:
             os.makedirs(self.database.users, exist_ok=True)
-            with open(f"{self.database.users}/{self.user_code}.txt", 'w') as file:
+            with open(f"{self.database.users}/{self.user_code}.txt", 'w', encoding='utf-8') as file:
                 file.writelines(self.name + ',')
                 file.writelines(self.user_code + ',')
         except Exception as e:
             print(f'Error saving user data: {e}')
 
-        # clear
-        self.input_name.delete(0, END)
-        self.input_user_code.delete(0, END)
+        # limpiar entrada
+        try:
+            self.input_name.delete(0, Tk.END)
+        except Exception:
+            pass
 
-        # face register
+        # abrir ventana de captura facial
         self.face_signup_window = Toplevel()
         self.face_signup_window.title('face capture')
         self.face_signup_window.geometry('1280x720')
@@ -371,8 +444,8 @@ class GraphicalUserInterface:
             entry.bind("<FocusIn>", on_focus_in)
             entry.bind("<FocusOut>", on_focus_out)
 
-        # Card parameters
-        card_w, card_h = 500, 320
+        # Card parameters (sin campo de código)
+        card_w, card_h = 500, 260
         card_x, card_y = (1280 - card_w) // 2, (720 - card_h) // 2
         card_radius = 40
         self.signup_card = Canvas(self.signup_window, width=card_w, height=card_h, bg='#e0e0e0', highlightthickness=0)
@@ -385,13 +458,13 @@ class GraphicalUserInterface:
         self.signup_card.create_rectangle(card_radius, 0, card_w-card_radius, card_h, fill='#e0e0e0', outline='')
         self.signup_card.create_rectangle(0, card_radius, card_w, card_h-card_radius, fill='#e0e0e0', outline='')
 
-        # Title LOGIN
-        self.signup_card.create_text(card_w//2, 48, text="LOGIN", font=("Segoe UI", 28, "bold"), fill="#222")
+        # Title REGISTER
+        self.signup_card.create_text(card_w//2, 40, text="REGISTER", font=("Segoe UI", 28, "bold"), fill="#222")
 
         # NAME label
         label_x = card_w//2 - 50
         input_x = card_w//2 - 10
-        self.signup_card.create_text(label_x, 110, text="NAME:", font=("Segoe UI", 14, "bold"), fill="#222", anchor='e')
+        self.signup_card.create_text(label_x, 95, text="NAME:", font=("Segoe UI", 14, "bold"), fill="#222", anchor='e')
         self.input_name = Entry(
             self.signup_window,
             width=28,
@@ -404,29 +477,12 @@ class GraphicalUserInterface:
             highlightcolor="#4a90e2",
             justify='left'
         )
-        self.input_name.place(x=card_x+input_x, y=card_y+95, anchor='w', width=260, height=32)
+        self.input_name.place(x=card_x+input_x, y=card_y+80, anchor='w', width=260, height=32)
         _add_placeholder(self.input_name, "Enter your name")
-
-        # USER CODE label
-        self.signup_card.create_text(label_x, 160, text="USER CODE:", font=("Segoe UI", 14, "bold"), fill="#222", anchor='e')
-        self.input_user_code = Entry(
-            self.signup_window,
-            width=28,
-            font=("Segoe UI", 12),
-            relief="flat",
-            bd=2,
-            bg="#FFFFFF",
-            highlightthickness=1,
-            highlightbackground="#c7c7c7",
-            highlightcolor="#4a90e2",
-            justify='left'
-        )
-        self.input_user_code.place(x=card_x+input_x, y=card_y+145, anchor='w', width=260, height=32)
-        _add_placeholder(self.input_user_code, "Enter your user code")
 
         # Botón FACE CAPTURE
         btn_w, btn_h, btn_r = 220, 48, 24
-        btn_x, btn_y = card_w//2 - btn_w//2, 220
+        btn_x, btn_y = card_w//2 - btn_w//2, 170
         def draw_signup_btn(canvas, x, y, w, h, r, color, text, tag):
             canvas.create_oval(x, y, x+2*r, y+2*r, fill=color, outline=color, tags=tag)
             canvas.create_oval(x+w-2*r, y, x+w, y+2*r, fill=color, outline=color, tags=tag)
@@ -440,7 +496,7 @@ class GraphicalUserInterface:
             self.data_sign_up()
         self.signup_card.tag_bind("signup_btn", "<Button-1>", on_signup_btn_click)
 
-        # Submit with Enter key from either input
+        # Submit with Enter key
         self.signup_window.bind('<Return>', lambda _e: self.data_sign_up())
 
     def main(self):
@@ -519,6 +575,7 @@ class GraphicalUserInterface:
                 return self._latest_frame.copy()
         except Exception:
             return None
+
     def _resize_main_bg(self):
         if self.bg_image_orig is None or self.bg_label is None:
             return
